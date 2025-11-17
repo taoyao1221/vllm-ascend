@@ -183,7 +183,10 @@ def quant_apply_mlp(hidden_states: torch.Tensor,
 def unquant_apply_mlp(hidden_states: torch.Tensor,
                       w1: torch.Tensor,
                       w2: torch.Tensor,
+                      w1_bias: Optional[torch.Tensor],
+                      w2_bias: Optional[torch.Tensor],
                       group_list: torch.Tensor,
+                      activation: Optional[str] = None,
                       group_list_type: int = 1,
                       topk_scales: Optional[torch.Tensor] = None,
                       need_trans: bool = True) -> torch.Tensor:
@@ -200,9 +203,31 @@ def unquant_apply_mlp(hidden_states: torch.Tensor,
         group_type=0,
         group_list=group_list,
     )[0]
+    # Add w1_bias
+    experts_indices = torch.arange(
+        len(group_list),
+        device=group_list.device).repeat_interleave(group_list)
+    if w1_bias is not None:
+        gate_up_out = gate_up_out + w1_bias[experts_indices]
+
+    # Do activation
+    # TODO: Remove this after we refactor activation behavior
+    def swiglu_oai(gate_up):
+        alpha = 1.702
+        limit = 7.0
+        gate, up = gate_up[..., ::2], gate_up[..., 1::2]
+        gate = gate.clamp(min=None, max=limit)
+        up = up.clamp(min=-limit, max=limit)
+        glu = gate * torch.sigmoid(gate * alpha)
+        gated_output = (up + 1) * glu
+        return gated_output
+
     if is_310p():
         gate_up_out = torch_npu.npu_swiglu(gate_up_out.to(torch.float32)).to(
             torch.float16)
+    elif activation == "swigluoai":
+        num_experts, _, hidden_size = w1.shape
+        gate_up_out = swiglu_oai(gate_up_out.view(-1, hidden_size))
     else:
         gate_up_out = torch_npu.npu_swiglu(gate_up_out)
 
@@ -217,6 +242,8 @@ def unquant_apply_mlp(hidden_states: torch.Tensor,
         group_type=0,
         group_list=group_list,
     )[0]
+    if w2_bias is not None:
+        hidden_states = hidden_states + w2_bias[experts_indices]
     return hidden_states
 
 
@@ -225,7 +252,10 @@ def unified_apply_mlp(hidden_states: torch.Tensor,
                       w1_scale: torch.Tensor,
                       w2: torch.Tensor,
                       w2_scale: torch.Tensor,
+                      w1_bias: Optional[torch.Tensor],
+                      w2_bias: Optional[torch.Tensor],
                       group_list: torch.Tensor,
+                      activation: Optional[str] = None,
                       dynamic_scale: torch.Tensor = None,
                       group_list_type: int = 1,
                       w1_scale_bias: torch.Tensor = None,
@@ -252,6 +282,9 @@ def unified_apply_mlp(hidden_states: torch.Tensor,
         return unquant_apply_mlp(hidden_states=hidden_states,
                                  w1=w1,
                                  w2=w2,
+                                 w1_bias=w1_bias,
+                                 w2_bias=w2_bias,
+                                 activation=activation,
                                  group_list=group_list,
                                  group_list_type=group_list_type,
                                  topk_scales=topk_scales,
