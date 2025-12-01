@@ -732,7 +732,6 @@ class AscendAttentionBackendImpl(AttentionImpl):
             else:
                 sparse_mode=3
             actual_seq_qlen = attn_metadata.query_lens.cumsum(dim=0)
-            actual_seq_kvlen = attn_metadata.seq_lens.cumsum(dim=0)
             attn_output, _ = torch_npu.npu_fused_infer_attention_score_v2(
                 query[:actual_seq_qlen[-1], :],
                 key[:actual_seq_qlen[-1], :],
@@ -746,7 +745,7 @@ class AscendAttentionBackendImpl(AttentionImpl):
                 sparse_mode=sparse_mode,
                 softmax_scale=self.scale,
                 actual_seq_qlen=actual_seq_qlen,
-                actual_seq_kvlen=actual_seq_kvlen,
+                actual_seq_kvlen=attn_metadata.seq_lens,
                 learnable_sink=self.sinks,
             )
             output[:actual_seq_qlen[-1], :].copy_(attn_output)
@@ -783,7 +782,6 @@ class AscendAttentionBackendImpl(AttentionImpl):
                 sparse_mode=3
             num_block, block_size, _, _ = self.key_cache.shape
             actual_seq_qlen = attn_metadata.query_lens.cumsum(dim=0)
-            actual_seq_kvlen = attn_metadata.seq_lens.cumsum(dim=0)
             attn_output, _ = torch_npu.npu_fused_infer_attention_score_v2(
                 query[:actual_seq_qlen[-1], :],
                 self.key_cache.view(num_block, block_size, self.num_kv_heads * self.head_size),
@@ -799,7 +797,7 @@ class AscendAttentionBackendImpl(AttentionImpl):
                 block_table=block_table,
                 block_size=block_size,
                 actual_seq_qlen=actual_seq_qlen,
-                actual_seq_kvlen=actual_seq_kvlen,
+                actual_seq_kvlen=attn_metadata.seq_lens,
                 learnable_sink=self.sinks,
                 )
             output[:actual_seq_qlen[-1], :].copy_(attn_output)
@@ -857,8 +855,7 @@ class AscendAttentionBackendImpl(AttentionImpl):
             else:
                 sparse_mode=3
             num_block, block_size, _, _ = self.key_cache.shape  # type: ignore
-            actual_seq_qlen = torch.tensor([1] * len(attn_metadata.seq_lens), dtype=torch.int32).cumsum(dim=0)
-            actual_seq_kvlen = attn_metadata.seq_lens.cumsum(dim=0)
+            actual_seq_qlen = torch.tensor([1] * len(attn_metadata.seq_lens_list), dtype=torch.int32).cumsum(dim=0)
             output, _ = torch_npu.npu_fused_infer_attention_score_v2(
                     query,
                     self.key_cache.view(num_block, block_size, self.num_kv_heads * self.head_size),
@@ -874,7 +871,7 @@ class AscendAttentionBackendImpl(AttentionImpl):
                     block_table=attn_metadata.block_tables,
                     block_size=block_size,
                     actual_seq_qlen=actual_seq_qlen,
-                    actual_seq_kvlen=actual_seq_kvlen,
+                    actual_seq_kvlen=attn_metadata.seq_lens_list,
                     learnable_sink=self.sinks,
                 )
         elif self.sliding_window is not None and attn_metadata.seq_lens.shape[
@@ -923,61 +920,87 @@ class AscendAttentionBackendImpl(AttentionImpl):
         attn_metadata: AscendMetadata,
         output: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        # Use chunked prefill for head size 192 scenario, like deepseek
-        # paged_attention_splitfuse maybe crash at such scenario.
-        # TODO: vanilla path will be removed after the kernel support
-        # head_size 192 scenario.
-        if self.head_size == 192:
-            cu_seqlen_q = [0] + attn_metadata.query_lens.tolist()
-            cu_seqlen_k = [0] + attn_metadata.seq_lens.tolist()
-            cu_seqlen_q = torch.tensor(cu_seqlen_q, device=query.device)
-            cu_seqlen_k = torch.tensor(cu_seqlen_k, device=query.device)
-            cu_seqlen_q = torch.cumsum(cu_seqlen_q, dim=0)
-            cu_seqlen_k = torch.cumsum(cu_seqlen_k, dim=0)
-            max_seqlen_q = torch.max(attn_metadata.query_lens)
-            max_seqlen_k = torch.max(attn_metadata.seq_lens)
-            vanilla_chunked_prefill(output, query, self.key_cache,
-                                    self.value_cache,
-                                    attn_metadata.block_tables, cu_seqlen_q,
-                                    cu_seqlen_k, max_seqlen_q, max_seqlen_k,
-                                    self.scale, None, True)
-            return output
+        # add sink support
+        if self.sinks is not None:
+            if self.sliding_window is not None:
+                sparse_mode=4
+            else:
+                sparse_mode=3
+            num_block, block_size, _, _ = self.key_cache.shape  # type: ignore
+            output, _ = torch_npu.npu_fused_infer_attention_score_v2(
+                    query,
+                    self.key_cache.view(num_block, block_size, self.num_kv_heads * self.head_size),
+                    self.value_cache.view(num_block, block_size, self.num_kv_heads * self.head_size),
+                    num_query_heads=self.num_heads,
+                    num_key_value_heads=self.num_kv_heads,
+                    input_layout="TND",
+                    pre_tokens=self.sliding_window if self.sliding_window is not None else 2147483647,
+                    next_tokens=0,
+                    atten_mask=self.share_mask_tril_spase,
+                    sparse_mode=sparse_mode,
+                    softmax_scale=self.scale,
+                    block_table=attn_metadata.block_tables,
+                    block_size=block_size,
+                    actual_seq_qlen=attn_metadata.query_start_loc_list,
+                    actual_seq_kvlen=attn_metadata.seq_lens,
+                    learnable_sink=self.sinks,
+                )
+        else:
+            # Use chunked prefill for head size 192 scenario, like deepseek
+            # paged_attention_splitfuse maybe crash at such scenario.
+            # TODO: vanilla path will be removed after the kernel support
+            # head_size 192 scenario.
+            if self.head_size == 192:
+                cu_seqlen_q = [0] + attn_metadata.query_lens.tolist()
+                cu_seqlen_k = [0] + attn_metadata.seq_lens.tolist()
+                cu_seqlen_q = torch.tensor(cu_seqlen_q, device=query.device)
+                cu_seqlen_k = torch.tensor(cu_seqlen_k, device=query.device)
+                cu_seqlen_q = torch.cumsum(cu_seqlen_q, dim=0)
+                cu_seqlen_k = torch.cumsum(cu_seqlen_k, dim=0)
+                max_seqlen_q = torch.max(attn_metadata.query_lens)
+                max_seqlen_k = torch.max(attn_metadata.seq_lens)
+                vanilla_chunked_prefill(output, query, self.key_cache,
+                                        self.value_cache,
+                                        attn_metadata.block_tables, cu_seqlen_q,
+                                        cu_seqlen_k, max_seqlen_q, max_seqlen_k,
+                                        self.scale, None, True)
+                return output
 
-        # Use paged attention.
-        assert attn_metadata is not None
-        assert attn_metadata.attn_mask is not None
+            # Use paged attention.
+            assert attn_metadata is not None
+            assert attn_metadata.attn_mask is not None
 
-        if get_ascend_device_type() == AscendDeviceType._310P:
-            # Do reformat in case of broadcasted tensors.
-            attn_metadata.attn_mask = \
-                torch_npu.npu_format_cast(attn_metadata.attn_mask.contiguous(),
-                                          ACL_FORMAT_FRACTAL_NZ)
-            attn_metadata.seq_lens = \
-                attn_metadata.seq_lens.to(device=query.device)
+            if get_ascend_device_type() == AscendDeviceType._310P:
+                # Do reformat in case of broadcasted tensors.
+                attn_metadata.attn_mask = \
+                    torch_npu.npu_format_cast(attn_metadata.attn_mask.contiguous(),
+                                              ACL_FORMAT_FRACTAL_NZ)
+                attn_metadata.seq_lens = \
+                    attn_metadata.seq_lens.to(device=query.device)
 
-        # TODO:The npu_fused_infer_attention_score op is planned to
-        # be utilized in a wider range in upcoming versions.
-        num_block, block_size, _, _ = self.key_cache.shape  # type: ignore
-        key = self.key_cache.view(  # type: ignore
-            num_block, block_size, -1)
-        value = self.value_cache.view(  # type: ignore
-            num_block, block_size, -1)
-
-        output, _ = torch_npu.npu_fused_infer_attention_score(
-            query=query,
-            key=key,
-            value=value,
-            atten_mask=attn_metadata.attn_mask,
-            block_table=attn_metadata.block_tables,
-            input_layout="TND",
-            block_size=block_size,
-            actual_seq_lengths=attn_metadata.actual_seq_lengths_q,
-            actual_seq_lengths_kv=attn_metadata.seq_lens_list,
-            num_key_value_heads=self.num_kv_heads,
-            num_heads=self.num_heads,
-            scale=self.scale,
-            sparse_mode=3,
-        )
+            # TODO:The npu_fused_infer_attention_score op is planned to
+            # be utilized in a wider range in upcoming versions.
+            num_block, block_size, _, _ = self.key_cache.shape  # type: ignore
+            key = self.key_cache.view(  # type: ignore
+                num_block, block_size, -1)
+            value = self.value_cache.view(  # type: ignore
+                num_block, block_size, -1)
+            
+            output, _ = torch_npu.npu_fused_infer_attention_score(
+                query=query,
+                key=key,
+                value=value,
+                atten_mask=attn_metadata.attn_mask,
+                block_table=attn_metadata.block_tables,
+                input_layout="TND",
+                block_size=block_size,
+                actual_seq_lengths=attn_metadata.actual_seq_lengths_q,
+                actual_seq_lengths_kv=attn_metadata.seq_lens_list,
+                num_key_value_heads=self.num_kv_heads,
+                num_heads=self.num_heads,
+                scale=self.scale,
+                sparse_mode=3,
+            )
         return output
 
     def _attention_with_nomask_and_mask(self, q: torch.Tensor,
