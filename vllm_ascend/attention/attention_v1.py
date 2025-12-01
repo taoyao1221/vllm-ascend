@@ -628,46 +628,71 @@ class AscendAttentionBackendImpl(AttentionImpl):
                                       key: torch.Tensor, value: torch.Tensor,
                                       attn_metadata: AscendMetadata,
                                       output: torch.Tensor):
-        forward_context: ForwardContext = get_forward_context()
-        # we inherit ForwardContext in model runner v2, when enable model
-        # runner v2, there is not capturing attribute in forward_context,
-        # just use getattr to avoid attribute error.
-        if getattr(forward_context, "capturing", False):
-            attn_output, num_tokens = self.full_graph_fia(
-                query, key, value, attn_metadata, output)
-            output[:num_tokens] = attn_output[:num_tokens]
-            return output
-        if (attn_metadata.attn_state == AscendAttentionState.DecodeOnly
-                and self.sliding_window is not None
-                and attn_metadata.seq_lens.shape[0] == query.size(0)):
-            return self._forward_fia_slidingwindow(query, attn_metadata,
-                                                   output)
-        key, value, block_size, block_table, actual_seq_lengths_kv \
-            = self._get_fia_params(key, value, attn_metadata)
-        num_tokens = attn_metadata.actual_seq_lengths_q[-1]
-        query = query[:num_tokens]
-        if attn_metadata.attn_state == AscendAttentionState.PrefillNoCache and self.attn_type != AttentionType.ENCODER_DECODER:
-            key = key[:num_tokens]
-            value = value[:num_tokens]
-        # Get workspace from cache or calculate it if not present.
-        attn_output, _ = torch_npu.npu_fused_infer_attention_score(
-            query=query,
-            key=key,
-            value=value,
-            atten_mask=attn_metadata.attn_mask,
-            block_table=block_table,
-            input_layout="TND",
-            block_size=block_size,
-            actual_seq_lengths=attn_metadata.actual_seq_lengths_q,
-            actual_seq_lengths_kv=actual_seq_lengths_kv,
-            num_key_value_heads=self.num_kv_heads,
-            num_heads=self.num_heads,
-            scale=self.scale,
-            sparse_mode=3,
-        )
+        if self.sinks is not None:
+            if self.sliding_window is not None:
+                sparse_mode=4
+            else:
+                sparse_mode=3
+            num_block, block_size, _, _ = self.key_cache.shape  # type: ignore
+            output, _ = torch_npu.npu_fused_infer_attention_score_v2(
+                    query,
+                    self.key_cache.view(num_block, block_size, self.num_kv_heads * self.head_size),
+                    self.value_cache.view(num_block, block_size, self.num_kv_heads * self.head_size),
+                    num_query_heads=self.num_heads,
+                    num_key_value_heads=self.num_kv_heads,
+                    input_layout="TND",
+                    pre_tokens=self.sliding_window if self.sliding_window is not None else 2147483647,
+                    next_tokens=0,
+                    atten_mask=self.share_mask_tril_spase,
+                    sparse_mode=sparse_mode,
+                    softmax_scale=self.scale,
+                    block_table=attn_metadata.block_tables,
+                    block_size=block_size,
+                    actual_seq_qlen=attn_metadata.query_start_loc_list,
+                    actual_seq_kvlen=attn_metadata.seq_lens,
+                    learnable_sink=self.sinks,
+                )
+        else:
+            forward_context: ForwardContext = get_forward_context()
+            # we inherit ForwardContext in model runner v2, when enable model
+            # runner v2, there is not capturing attribute in forward_context,
+            # just use getattr to avoid attribute error.
+            if getattr(forward_context, "capturing", False):
+                attn_output, num_tokens = self.full_graph_fia(
+                    query, key, value, attn_metadata, output)
+                output[:num_tokens] = attn_output[:num_tokens]
+                return output
+            if (attn_metadata.attn_state == AscendAttentionState.DecodeOnly
+                    and self.sliding_window is not None
+                    and attn_metadata.seq_lens.shape[0] == query.size(0)):
+                return self._forward_fia_slidingwindow(query, attn_metadata,
+                                                       output)
+            key, value, block_size, block_table, actual_seq_lengths_kv \
+                = self._get_fia_params(key, value, attn_metadata)
+            num_tokens = attn_metadata.actual_seq_lengths_q[-1]
+            query = query[:num_tokens]
+            if attn_metadata.attn_state == AscendAttentionState.PrefillNoCache:
+                key = key[:num_tokens]
+                value = value[:num_tokens]
+            # Get workspace from cache or calculate it if not present.
+            attn_output, _ = torch_npu.npu_fused_infer_attention_score(
+                query=query,
+                key=key,
+                value=value,
+                atten_mask=attn_metadata.attn_mask,
+                block_table=block_table,
+                input_layout="TND",
+                block_size=block_size,
+                actual_seq_lengths=attn_metadata.actual_seq_lengths_q,
+                actual_seq_lengths_kv=actual_seq_lengths_kv,
+                num_key_value_heads=self.num_kv_heads,
+                num_heads=self.num_heads,
+                scale=self.scale,
+                sparse_mode=3,
+            )
 
-        attn_output = attn_output.view(num_tokens, self.num_heads,
-                                       self.head_size)
+            attn_output = attn_output.view(num_tokens, self.num_heads,
+                                           self.head_size)
         output[:num_tokens] = attn_output[:num_tokens]
         return output
 
