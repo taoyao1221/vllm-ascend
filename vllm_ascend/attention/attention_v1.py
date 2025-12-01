@@ -595,7 +595,7 @@ class AscendAttentionBackendImpl(AttentionImpl):
                     block_table=attn_metadata.block_tables,
                     block_size=block_size,
                     actual_seq_qlen=actual_seq_qlen,
-                    actual_seq_kvlen=actual_seq_kvlen,
+                    actual_seq_kvlen=attn_metadata.seq_lens_list,
                     learnable_sink=self.sinks,
                 )
         else:
