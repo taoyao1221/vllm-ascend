@@ -571,7 +571,8 @@ class AscendAttentionBackendImpl(AttentionImpl):
             tril_mask = torch.tril(mask, -self.sliding_window).to("npu")
             self.share_mask_tril_spase = triu_mask + tril_mask
         else:
-            self.share_mask_tril_spase = ~torch.tril(torch.ones((2048, 2048), device='npu', dtype=torch.bool))
+            self.share_mask_tril_spase = ~torch.tril(
+                torch.ones((2048, 2048), device='npu', dtype=torch.bool))
 
         # For sink attention
         self.sinks = sinks
@@ -728,9 +729,9 @@ class AscendAttentionBackendImpl(AttentionImpl):
 
         if self.sinks is not None:
             if self.sliding_window is not None:
-                sparse_mode=4
+                sparse_mode = 4
             else:
-                sparse_mode=3
+                sparse_mode = 3
             actual_seq_qlen = attn_metadata.query_lens.cumsum(dim=0)
             attn_output, _ = torch_npu.npu_fused_infer_attention_score_v2(
                 query[:actual_seq_qlen[-1], :],
@@ -739,7 +740,8 @@ class AscendAttentionBackendImpl(AttentionImpl):
                 num_query_heads=self.num_heads,
                 num_key_value_heads=self.num_kv_heads,
                 input_layout="TND",
-                pre_tokens=self.sliding_window if self.sliding_window is not None else 2147483647,
+                pre_tokens=self.sliding_window 
+                if self.sliding_window is not None else 2147483647,
                 next_tokens=0,
                 atten_mask=self.share_mask_tril_spase,
                 sparse_mode=sparse_mode,
@@ -751,14 +753,14 @@ class AscendAttentionBackendImpl(AttentionImpl):
             output[:actual_seq_qlen[-1], :].copy_(attn_output)
         else:
             torch_npu._npu_flash_attention(query=query,
-                                        key=key,
-                                        value=value,
-                                        mask=mask,
-                                        seq_len=attn_metadata.seq_lens,
-                                        scale_value=self.scale,
-                                        num_heads=self.num_heads,
-                                        num_kv_heads=self.num_kv_heads,
-                                        out=output)
+                                           key=key,
+                                           value=value,
+                                           mask=mask,
+                                           seq_len=attn_metadata.seq_lens,
+                                           scale_value=self.scale,
+                                           num_heads=self.num_heads,
+                                           num_kv_heads=self.num_kv_heads,
+                                           out=output)
         assert output is not None
         return output[:num_tokens]
 
@@ -777,19 +779,22 @@ class AscendAttentionBackendImpl(AttentionImpl):
         num_block, block_size, _, _ = self.key_cache.shape  # type: ignore
         if self.sinks is not None:
             if self.sliding_window is not None:
-                sparse_mode=4
+                sparse_mode = 4
             else:
-                sparse_mode=3
+                sparse_mode = 3
             num_block, block_size, _, _ = self.key_cache.shape
             actual_seq_qlen = attn_metadata.query_lens.cumsum(dim=0)
             attn_output, _ = torch_npu.npu_fused_infer_attention_score_v2(
                 query[:actual_seq_qlen[-1], :],
-                self.key_cache.view(num_block, block_size, self.num_kv_heads * self.head_size),
-                self.value_cache.view(num_block, block_size, self.num_kv_heads * self.head_size),
+                self.key_cache.view(num_block, block_size,
+                                    self.num_kv_heads * self.head_size),
+                self.value_cache.view(num_block, block_size,
+                                      self.num_kv_heads * self.head_size),
                 num_query_heads=self.num_heads,
                 num_key_value_heads=self.num_kv_heads,
                 input_layout="TND",
-                pre_tokens=self.sliding_window if self.sliding_window is not None else 2147483647,
+                pre_tokens=self.sliding_window 
+                if self.sliding_window is not None else 2147483647,
                 next_tokens=0,
                 atten_mask=self.share_mask_tril_spase,
                 sparse_mode=sparse_mode,
@@ -851,29 +856,34 @@ class AscendAttentionBackendImpl(AttentionImpl):
                 attn_metadata.seq_lens.to(device=query.device)
         if self.sinks is not None:
             if self.sliding_window is not None:
-                sparse_mode=4
+                sparse_mode = 4
             else:
-                sparse_mode=3
+                sparse_mode = 3
             num_block, block_size, _, _ = self.key_cache.shape  # type: ignore
-            actual_seq_qlen = torch.tensor([1] * len(attn_metadata.seq_lens_list), dtype=torch.int32).cumsum(dim=0)
+            actual_seq_qlen = torch.tensor([1] *
+                                           len(attn_metadata.seq_lens_list),
+                                           dtype=torch.int32).cumsum(dim=0)
             output, _ = torch_npu.npu_fused_infer_attention_score_v2(
-                    query,
-                    self.key_cache.view(num_block, block_size, self.num_kv_heads * self.head_size),
-                    self.value_cache.view(num_block, block_size, self.num_kv_heads * self.head_size),
-                    num_query_heads=self.num_heads,
-                    num_key_value_heads=self.num_kv_heads,
-                    input_layout="TND",
-                    pre_tokens=self.sliding_window if self.sliding_window is not None else 2147483647,
-                    next_tokens=0,
-                    atten_mask=self.share_mask_tril_spase,
-                    sparse_mode=sparse_mode,
-                    softmax_scale=self.scale,
-                    block_table=attn_metadata.block_tables,
-                    block_size=block_size,
-                    actual_seq_qlen=actual_seq_qlen,
-                    actual_seq_kvlen=attn_metadata.seq_lens_list,
-                    learnable_sink=self.sinks,
-                )
+                query,
+                self.key_cache.view(num_block, block_size,
+                                    self.num_kv_heads * self.head_size),
+                self.value_cache.view(num_block, block_size,
+                                      self.num_kv_heads * self.head_size),
+                num_query_heads=self.num_heads,
+                num_key_value_heads=self.num_kv_heads,
+                input_layout="TND",
+                pre_tokens=self.sliding_window 
+                if self.sliding_window is not None else 2147483647,
+                next_tokens=0,
+                atten_mask=self.share_mask_tril_spase,
+                sparse_mode=sparse_mode,
+                softmax_scale=self.scale,
+                block_table=attn_metadata.block_tables,
+                block_size=block_size,
+                actual_seq_qlen=actual_seq_qlen,
+                actual_seq_kvlen=attn_metadata.seq_lens_list,
+                learnable_sink=self.sinks,
+            )
         elif self.sliding_window is not None and attn_metadata.seq_lens.shape[
                 0] == query.size(0):
             batch_size = attn_metadata.seq_lens.shape[0]
@@ -923,28 +933,31 @@ class AscendAttentionBackendImpl(AttentionImpl):
         # add sink support
         if self.sinks is not None:
             if self.sliding_window is not None:
-                sparse_mode=4
+                sparse_mode = 4
             else:
-                sparse_mode=3
+                sparse_mode = 3
             num_block, block_size, _, _ = self.key_cache.shape  # type: ignore
             output, _ = torch_npu.npu_fused_infer_attention_score_v2(
-                    query,
-                    self.key_cache.view(num_block, block_size, self.num_kv_heads * self.head_size),
-                    self.value_cache.view(num_block, block_size, self.num_kv_heads * self.head_size),
-                    num_query_heads=self.num_heads,
-                    num_key_value_heads=self.num_kv_heads,
-                    input_layout="TND",
-                    pre_tokens=self.sliding_window if self.sliding_window is not None else 2147483647,
-                    next_tokens=0,
-                    atten_mask=self.share_mask_tril_spase,
-                    sparse_mode=sparse_mode,
-                    softmax_scale=self.scale,
-                    block_table=attn_metadata.block_tables,
-                    block_size=block_size,
-                    actual_seq_qlen=attn_metadata.query_start_loc_list,
-                    actual_seq_kvlen=attn_metadata.seq_lens,
-                    learnable_sink=self.sinks,
-                )
+                query,
+                self.key_cache.view(num_block, block_size,
+                                    self.num_kv_heads * self.head_size),
+                self.value_cache.view(num_block, block_size,
+                                      self.num_kv_heads * self.head_size),
+                num_query_heads=self.num_heads,
+                num_key_value_heads=self.num_kv_heads,
+                input_layout="TND",
+                pre_tokens=self.sliding_window 
+                if self.sliding_window is not None else 2147483647,
+                next_tokens=0,
+                atten_mask=self.share_mask_tril_spase,
+                sparse_mode=sparse_mode,
+                softmax_scale=self.scale,
+                block_table=attn_metadata.block_tables,
+                block_size=block_size,
+                actual_seq_qlen=attn_metadata.query_start_loc_list,
+                actual_seq_kvlen=attn_metadata.seq_lens,
+                learnable_sink=self.sinks,
+            )
         else:
             # Use chunked prefill for head size 192 scenario, like deepseek
             # paged_attention_splitfuse maybe crash at such scenario.
@@ -961,9 +974,9 @@ class AscendAttentionBackendImpl(AttentionImpl):
                 max_seqlen_k = torch.max(attn_metadata.seq_lens)
                 vanilla_chunked_prefill(output, query, self.key_cache,
                                         self.value_cache,
-                                        attn_metadata.block_tables, cu_seqlen_q,
-                                        cu_seqlen_k, max_seqlen_q, max_seqlen_k,
-                                        self.scale, None, True)
+                                        attn_metadata.block_tables,
+                                        cu_seqlen_q, cu_seqlen_k, max_seqlen_q,
+                                        max_seqlen_k, self.scale, None, True)
                 return output
 
             # Use paged attention.
