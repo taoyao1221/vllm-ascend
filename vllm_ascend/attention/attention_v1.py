@@ -47,6 +47,7 @@ from vllm_ascend.utils import (ACL_FORMAT_FRACTAL_NZ, AscendDeviceType,
                                nd_to_nz_spec, prefill_context_parallel_enable,
                                weak_ref_tensors)
 
+MAX_INT=2147483647
 # isort: off
 if prefill_context_parallel_enable():
     from vllm.distributed import (get_pcp_group,
@@ -590,6 +591,9 @@ class AscendAttentionBackendImpl(AttentionImpl):
         self.dcp_group = get_dcp_group(
         ).device_group if self.dcp_size > 1 else None
 
+        # Set sparse_mode based on sliding_window for sink attention
+        self.sparse_mode_with_sinks = 4 if (self.sinks is not None and self.sliding_window is not None) else 3
+
     def full_graph_attention(self,
                              query: torch.Tensor,
                              key: torch.Tensor,
@@ -728,10 +732,6 @@ class AscendAttentionBackendImpl(AttentionImpl):
                                              ACL_FORMAT_FRACTAL_NZ)
 
         if self.sinks is not None:
-            if self.sliding_window is not None:
-                sparse_mode = 4
-            else:
-                sparse_mode = 3
             actual_seq_qlen = attn_metadata.query_lens.cumsum(dim=0)
             attn_output, _ = torch_npu.npu_fused_infer_attention_score_v2(
                 query[:actual_seq_qlen[-1], :],
@@ -741,13 +741,13 @@ class AscendAttentionBackendImpl(AttentionImpl):
                 num_key_value_heads=self.num_kv_heads,
                 input_layout="TND",
                 pre_tokens=self.sliding_window 
-                if self.sliding_window is not None else 2147483647,
+                if self.sliding_window is not None else MAX_INT,
                 next_tokens=0,
                 atten_mask=self.share_mask_tril_spase,
-                sparse_mode=sparse_mode,
+                sparse_mode=self.sparse_mode_with_sinks,
                 softmax_scale=self.scale,
                 actual_seq_qlen=actual_seq_qlen,
-                actual_seq_kvlen=attn_metadata.seq_lens,
+                actual_seq_kvlen=attn_metadata.seq_lens_list,
                 learnable_sink=self.sinks,
             )
             output[:actual_seq_qlen[-1], :].copy_(attn_output)
@@ -778,10 +778,6 @@ class AscendAttentionBackendImpl(AttentionImpl):
         block_table = attn_metadata.block_tables[:batch_size, :]
         num_block, block_size, _, _ = self.key_cache.shape  # type: ignore
         if self.sinks is not None:
-            if self.sliding_window is not None:
-                sparse_mode = 4
-            else:
-                sparse_mode = 3
             num_block, block_size, _, _ = self.key_cache.shape
             actual_seq_qlen = attn_metadata.query_lens.cumsum(dim=0)
             attn_output, _ = torch_npu.npu_fused_infer_attention_score_v2(
@@ -794,15 +790,15 @@ class AscendAttentionBackendImpl(AttentionImpl):
                 num_key_value_heads=self.num_kv_heads,
                 input_layout="TND",
                 pre_tokens=self.sliding_window 
-                if self.sliding_window is not None else 2147483647,
+                if self.sliding_window is not None else MAX_INT,
                 next_tokens=0,
                 atten_mask=self.share_mask_tril_spase,
-                sparse_mode=sparse_mode,
+                sparse_mode=self.sparse_mode_with_sinks,
                 softmax_scale=self.scale,
                 block_table=block_table,
                 block_size=block_size,
                 actual_seq_qlen=actual_seq_qlen,
-                actual_seq_kvlen=attn_metadata.seq_lens,
+                actual_seq_kvlen=attn_metadata.seq_lens_list,
                 learnable_sink=self.sinks,
                 )
             output[:actual_seq_qlen[-1], :].copy_(attn_output)
@@ -855,14 +851,8 @@ class AscendAttentionBackendImpl(AttentionImpl):
             attn_metadata.seq_lens = \
                 attn_metadata.seq_lens.to(device=query.device)
         if self.sinks is not None:
-            if self.sliding_window is not None:
-                sparse_mode = 4
-            else:
-                sparse_mode = 3
             num_block, block_size, _, _ = self.key_cache.shape  # type: ignore
-            actual_seq_qlen = torch.tensor([1] *
-                                           len(attn_metadata.seq_lens_list),
-                                           dtype=torch.int32).cumsum(dim=0)
+            actual_seq_qlen = [i+1 for i in range(len(attn_metadata.seq_lens_list))]
             output, _ = torch_npu.npu_fused_infer_attention_score_v2(
                 query,
                 self.key_cache.view(num_block, block_size,
@@ -873,10 +863,10 @@ class AscendAttentionBackendImpl(AttentionImpl):
                 num_key_value_heads=self.num_kv_heads,
                 input_layout="TND",
                 pre_tokens=self.sliding_window 
-                if self.sliding_window is not None else 2147483647,
+                if self.sliding_window is not None else MAX_INT,
                 next_tokens=0,
                 atten_mask=self.share_mask_tril_spase,
-                sparse_mode=sparse_mode,
+                sparse_mode=self.sparse_mode_with_sinks,
                 softmax_scale=self.scale,
                 block_table=attn_metadata.block_tables,
                 block_size=block_size,
@@ -932,10 +922,6 @@ class AscendAttentionBackendImpl(AttentionImpl):
     ) -> torch.Tensor:
         # add sink support
         if self.sinks is not None:
-            if self.sliding_window is not None:
-                sparse_mode = 4
-            else:
-                sparse_mode = 3
             num_block, block_size, _, _ = self.key_cache.shape  # type: ignore
             output, _ = torch_npu.npu_fused_infer_attention_score_v2(
                 query,
@@ -947,15 +933,15 @@ class AscendAttentionBackendImpl(AttentionImpl):
                 num_key_value_heads=self.num_kv_heads,
                 input_layout="TND",
                 pre_tokens=self.sliding_window 
-                if self.sliding_window is not None else 2147483647,
+                if self.sliding_window is not None else MAX_INT,
                 next_tokens=0,
                 atten_mask=self.share_mask_tril_spase,
-                sparse_mode=sparse_mode,
+                sparse_mode=self.sparse_mode_with_sinks,
                 softmax_scale=self.scale,
                 block_table=attn_metadata.block_tables,
                 block_size=block_size,
                 actual_seq_qlen=attn_metadata.query_start_loc_list,
-                actual_seq_kvlen=attn_metadata.seq_lens,
+                actual_seq_kvlen=attn_metadata.seq_lens_list,
                 learnable_sink=self.sinks,
             )
         else:
