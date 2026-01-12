@@ -192,7 +192,7 @@ class AllGatherCommImpl(MoECommMethod):
     """
 
     def _get_token_dispatcher(self):
-        if self.model_type == "PanguProMoE":
+        if self.model_type == "PanguProMoE" and self.moe_config.num_experts == 64:
             return TokenDispatcherWithMoge(
                 top_k=self.moe_config.experts_per_token,
                 num_experts=self.moe_config.num_experts,

@@ -20,7 +20,7 @@ def __post_init__(self):
         if (self.target_model_config
                 and self.target_model_config.hf_text_config.model_type
                 in ("deepseek_v3", "deepseek_v32", "mimo", "ernie4_5_moe",
-                    "qwen3_next")):
+                    "qwen3_next", "PanguProMoE")): #hyj
             # use the draft model from the same model:
             self.model = self.target_model_config.model
             # Align the quantization of draft model for cases such as
@@ -119,7 +119,7 @@ def __post_init__(self):
                   "mlp_speculator"):
                 self.method = "mlp_speculator"
             elif (self.draft_model_config.hf_config.model_type
-                  in ("deepseek_mtp", "mimo_mtp", "glm4_moe_mtp")):
+                  in ("deepseek_mtp", "mimo_mtp", "glm4_moe_mtp",  "pangu_pro_moe_mtp")):
                 self.method = "deepseek_mtp"
                 if self.num_speculative_tokens > 1:
                     logger.warning(

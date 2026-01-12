@@ -200,6 +200,23 @@ def _select_experts_with_fusion_ops(
             x=router_logits, finished=None, k=top_k)
         topk_ids = topk_ids.to(torch.int32)
         topk_weights = _renormalize_topk_weights(topk_weights, renormalize)
+    elif scoring_func == "sigmoid":
+        if e_score_correction_bias is not None:
+            e_score_correction_bias = e_score_correction_bias.to(router_logits.dtype)
+        if routed_scaling_factor is None:
+            routed_scaling_factor = 1
+        topk_weights, topk_ids, _ = torch_npu.npu_moe_gating_top_k(
+                router_logits,
+                k=top_k,  # topk当前写8
+                bias=e_score_correction_bias,
+                k_group=1,  # fix: 4
+                group_count=1,  # fix 8
+                group_select_mode=1,  # 0: group中的最大; 1: topk2.sum(fix)
+                renorm=0,  # 0: softmax->topk(fix); 1: topk->softmax
+                norm_type=1,  # 0: softmax; 1: sigmoid(fix)
+                routed_scaling_factor=routed_scaling_factor,
+                eps=float(1e-20),
+            )
 
     return topk_weights, topk_ids
 

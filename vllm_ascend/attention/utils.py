@@ -7,7 +7,19 @@ from vllm.distributed.kv_transfer import (get_kv_transfer_group,
                                           has_kv_transfer_group,
                                           is_v1_kv_transfer_group)
 from vllm.forward_context import ForwardContext, get_forward_context
+from vllm.config import CUDAGraphMode, VllmConfig
 
+def using_paged_attention(runtime_shape: int, vllm_config: VllmConfig) -> bool:
+    from vllm.config.compilation import CUDAGraphMode
+    cudagraph_mode = vllm_config.compilation_config.cudagraph_mode
+
+    config =  vllm_config.model_config.hf_config
+    use_sink_attention = (hasattr(config, "param_sink_number") and config.param_sink_number > 0)
+
+    if cudagraph_mode == CUDAGraphMode.FULL_DECODE_ONLY and use_sink_attention:
+        return False
+
+    return True
 
 @dataclass
 class AscendCommonAttentionMetadata:

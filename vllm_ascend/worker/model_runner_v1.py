@@ -81,7 +81,8 @@ from vllm.v1.cudagraph_dispatcher import CudagraphDispatcher
 # yapf: disable
 from vllm.v1.kv_cache_interface import (AttentionSpec,
                                         EncoderOnlyAttentionSpec,
-                                        FullAttentionSpec, KVCacheConfig,
+                                        FullAttentionSpec, SinkFullAttentionSpec, 
+                                        KVCacheConfig,
                                         KVCacheGroupSpec, KVCacheSpec,
                                         MambaSpec, MLAAttentionSpec,
                                         UniformTypeKVCacheSpecs)
@@ -314,6 +315,10 @@ class NPUModelRunner(LoRAModelRunnerMixin):
         # Set up Attention
         self.use_sparse = hasattr(self.vllm_config.model_config.hf_config,
                                   "index_topk")
+        # from msprobe.pytorch import PrecisionDebugger
+        # self.debugger = PrecisionDebugger(dump_path="/home/work/t00518822/dump_output_L2_011", config_path='/home/work/t00518822/dump_output_L2_011/config.json')
+        # self.debugger = PrecisionDebugger(dump_path="/home/work/t00518822/dump_output_L1_011", config_path='/home/work/t00518822/dump_output_L1_011/config.json')
+        # self.debugger = PrecisionDebugger(dump_path="/home/work/t00518822/dump_output_L0_011", config_path='/home/work/t00518822/dump_output_L0_011/config.json')
         self.attn_backend = get_attn_backend(0,
                                              self.dtype,
                                              None,
@@ -1597,9 +1602,12 @@ class NPUModelRunner(LoRAModelRunnerMixin):
                                        maybe_padded_num_tokens,
                                        self.speculative_config)
             else:
+                #update_attn_params(self.update_stream, forward_context,
+                #                   maybe_padded_num_tokens,
+                #                   self.vllm_config.kv_transfer_config)
                 update_attn_params(self.update_stream, forward_context,
                                    maybe_padded_num_tokens,
-                                   self.vllm_config.kv_transfer_config)
+                                   self.vllm_config)
 
         if get_forward_context().sp_enabled:
             hidden_states = tensor_model_parallel_all_gather(hidden_states, 0)
@@ -1620,10 +1628,14 @@ class NPUModelRunner(LoRAModelRunnerMixin):
                 # SpecDecoding now supports seq_len=1 and seq_len=2
                 # In Prefilling Decoding Disaggregation scenario, SpecDecoding need to supports seq_len=1
                 attn_state = AscendAttentionState.SpecDecoding
+                # attn_state = AscendAttentionState.DecodeOnly #hyj
+                
         # Speculative decoding.
         elif np.all(num_valid_tokens == 1):
             if self.speculative_config and self.speculative_config.method == 'deepseek_mtp':
                 attn_state = AscendAttentionState.SpecDecoding
+                # attn_state = AscendAttentionState.DecodeOnly #hyj
+                
             else:
                 attn_state = AscendAttentionState.ChunkedPrefill
         # splitfuse
@@ -1924,6 +1936,10 @@ class NPUModelRunner(LoRAModelRunnerMixin):
         scheduler_output: "SchedulerOutput",
         intermediate_tensors: Optional[IntermediateTensors] = None,
     ) -> Union[ModelRunnerOutput, AsyncModelRunnerOutput, IntermediateTensors]:
+        # L0 use 
+        # self.debugger.start(self.model)
+        # L1 use
+        # self.debugger.start()
         with ProfileExecuteDuration().capture_async("prepare input"):
             self._update_states(scheduler_output)
             if not scheduler_output.total_num_scheduled_tokens:
@@ -2201,6 +2217,8 @@ class NPUModelRunner(LoRAModelRunnerMixin):
             pooler_output=[],
             **extra_args,
         )
+        # self.debugger.stop()
+        # self.debugger.step()
 
         durations = ProfileExecuteDuration().pop_captured_sync()
         if durations:
@@ -2332,6 +2350,7 @@ class NPUModelRunner(LoRAModelRunnerMixin):
                 if self.speculative_config and \
                         self.speculative_config.method == "deepseek_mtp":
                     attn_state = AscendAttentionState.SpecDecoding
+                    # attn_state = AscendAttentionState.DecodeOnly
 
                 for attn_group in self.attn_groups[kv_cache_group_id]:
                     builder = attn_group.get_metadata_builder()
@@ -2359,9 +2378,12 @@ class NPUModelRunner(LoRAModelRunnerMixin):
                 update_mla_attn_params(self.update_stream, forward_context,
                                        num_tokens, self.speculative_config)
             else:
+                #update_attn_params(self.update_stream, forward_context,
+                #                   num_tokens,
+                #                   self.vllm_config.kv_transfer_config)
                 update_attn_params(self.update_stream, forward_context,
                                    num_tokens,
-                                   self.vllm_config.kv_transfer_config)
+                                   self.vllm_config)
 
         if self.drafter and self.drafter.name == SpecDcodeType.EAGLE3:
             hidden_states, _ = hidden_states
@@ -2969,7 +2991,7 @@ class NPUModelRunner(LoRAModelRunnerMixin):
                                               Optional[torch.Tensor]]] = {}
         # llmdatadist need the addr of cache tensor be aligned with 2M
         alignment = 2 * 1024 * 1024
-        for kv_cache_tensor in kv_cache_config.kv_cache_tensors:
+        for kv_cache_tensor in kv_cache_config.kv_cache_tensors:  #kv_cache_config.kv_cache_tensors 所有层的KV size
             # TODO: REFACTOR ME to sharing hybrid cache
             for idx in range(len(kv_cache_tensor.shared_by)):
                 layer_name = kv_cache_tensor.shared_by[idx]
@@ -2993,7 +3015,25 @@ class NPUModelRunner(LoRAModelRunnerMixin):
                         kv_cache_raw_tensors[layer_name_inner] = tensor
                 elif "attn" in layer_name:
                     # for other attentions, e.g., self_attn, sliding window attn
-                    if self.vllm_config.kv_transfer_config is None:
+                    if self.model_config.is_different_kvdim:
+                        head_dim = 192
+                        v_dim = self.model_config.hf_text_config.v_channels
+                        v_ratio = v_dim /(head_dim + v_dim)
+                        k_cache_size = int(kv_cache_tensor.size * (1 - v_ratio))
+                        v_cache_size = int(kv_cache_tensor.size * v_ratio)
+                        k_cache_size_aligned = k_cache_size + alignment
+                        k_tensor = torch.zeros(k_cache_size_aligned,
+                                               dtype=torch.int8,
+                                               device=self.device)
+                        v_cache_size_aligned = v_cache_size + alignment
+                        v_tensor = torch.zeros(v_cache_size_aligned,
+                                               dtype=torch.int8,
+                                               device=self.device)
+                        k_tensor = self._align_memory(k_tensor,
+                                                      alignment)[:k_cache_size]
+                        v_tensor = self._align_memory(v_tensor,
+                                                      alignment)[:v_cache_size]
+                    elif self.vllm_config.kv_transfer_config is None:
                         k_tensor = torch.zeros(kv_cache_tensor.size // 2,
                                                dtype=torch.int8,
                                                device=self.device)
@@ -3074,9 +3114,14 @@ class NPUModelRunner(LoRAModelRunnerMixin):
                             kv_cache_spec.num_kv_heads,
                             kv_cache_spec.head_size)
                     dtype = kv_cache_spec.dtype
-                    k_cache = raw_k_tensor.view(dtype).view(kv_cache_shape[1:])
+                    k_cache_shape = kv_cache_shape[1:]
+                    v_cache_shape = kv_cache_shape[1:]
+                    if self.model_config.is_different_kvdim:
+                        v_cache_shape = list(v_cache_shape)
+                        v_cache_shape[-1] = self.model_config.hf_text_config.v_channels
+                    k_cache = raw_k_tensor.view(dtype).view(k_cache_shape)
                     k_cache = self._convert_torch_format(k_cache)
-                    v_cache = raw_v_tensor.view(dtype).view(kv_cache_shape[1:])
+                    v_cache = raw_v_tensor.view(dtype).view(v_cache_shape)
                     v_cache = self._convert_torch_format(v_cache)
                     kv_caches[layer_name] = (k_cache, v_cache)
                 elif isinstance(kv_cache_spec, MambaSpec):
@@ -3364,7 +3409,15 @@ class NPUModelRunner(LoRAModelRunnerMixin):
             # TODO(lucas): move the attention specs into the model layers like
             # the attention backends
             if attn_module.attn_type == AttentionType.DECODER:
-                if use_mla and not use_sparse:
+                if self.model_config.is_different_kvdim:
+                    kv_cache_spec[layer_name] = SinkFullAttentionSpec(
+                        block_size=block_size,
+                        num_kv_heads=attn_module.num_kv_heads,
+                        head_size=attn_module.head_size,
+                        head_size_v=attn_module.head_size_v,
+                        sink_len=attn_module.sink_len,
+                        dtype=self.kv_cache_dtype)
+                elif use_mla and not use_sparse:
                     kv_cache_spec[layer_name] = MLAAttentionSpec(
                         block_size=block_size,
                         num_kv_heads=attn_module.num_kv_heads,

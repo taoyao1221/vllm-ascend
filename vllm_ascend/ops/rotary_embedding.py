@@ -150,6 +150,8 @@ class AscendRotaryEmbedding(RotaryEmbedding):
                 self.cos = cos.view(1, -1, 1, last_dim).contiguous()
                 self.sin = sin.view(1, -1, 1, last_dim).contiguous()
                 forward_context.is_first_layer = False
+        elif self.head_size == 192:
+            return self.forward_native(positions, query, key)
         return _rope_forward_oot(self, positions, query, key, is_neox_style,
                                  offsets)
 

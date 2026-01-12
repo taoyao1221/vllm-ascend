@@ -14,6 +14,7 @@ from vllm.model_executor.model_loader.utils import (
 from vllm.v1.core.sched.output import SchedulerOutput
 from vllm.v1.sample.metadata import SamplingMetadata
 from vllm.v1.spec_decode.metadata import SpecDecodeMetadata
+from vllm.model_executor.models.openpangu_mtp import OpenPanguMTP
 
 from vllm_ascend.ascend_config import get_ascend_config
 from vllm_ascend.ascend_forward_context import set_ascend_forward_context
@@ -80,16 +81,18 @@ class MtpProposer(Proposer):
             self.vllm_config.speculative_config.draft_model_config
         target_device = self.vllm_config.device_config.device
 
-        with set_default_torch_dtype(
-                draft_model_config.dtype), set_current_vllm_config(
-                    self.vllm_config):
+
+        with set_default_torch_dtype(draft_model_config.dtype), set_current_vllm_config(self.vllm_config):
             if self.torchair_graph_enabled or (
                     self.enable_shared_expert_dp
                     and self.vllm_config.model_config.use_mla):
                 self.model = TorchairDeepSeekMTP(
                     vllm_config=self.vllm_config).to(target_device)
             else:
-                self.model = DeepSeekMTP(
+                if self.vllm_config.model_config.hf_config.model_type == 'PanguProMoE':
+                    self.model = OpenPanguMTP(vllm_config=self.vllm_config).to(target_device)
+                else:
+                    self.model = DeepSeekMTP(
                     vllm_config=self.vllm_config).to(target_device)
 
         draft_attn_layer_names = (
@@ -147,6 +150,7 @@ class MtpProposer(Proposer):
         input_ids = self.input_ids[:num_tokens]
         positions = self.positions[:num_tokens]
         previous_hidden_states = self.hidden_states[:num_tokens]
+
         for _ in range(self.num_speculative_tokens):
             with set_ascend_forward_context(
                     attn_metadata,
@@ -390,6 +394,7 @@ class MtpProposer(Proposer):
         common_attn_metadata = AscendCommonAttentionMetadata(
             query_start_loc=cu_num_tokens[:batch_size + 1],
             query_start_loc_cpu=cu_num_tokens[:batch_size + 1].cpu(),
+            seq_lens=seq_lens,
             seq_lens_cpu=seq_lens.cpu(),
             num_reqs=batch_size,
             num_actual_tokens=num_tokens,
@@ -404,9 +409,7 @@ class MtpProposer(Proposer):
             attn_state=self.runner.attn_state,
             graph_pad_size=self.runner.graph_pad_size,
             decode_token_per_req=self.runner.decode_token_per_req,
-            num_computed_tokens_cpu=None,
-            seq_lens=None)
-
+            num_computed_tokens_cpu=None)
         if not self.torchair_graph_enabled:
             builder = self.runner.attn_groups[0][0].get_metadata_builder()
             attn_metadata_mtp = builder.build(0, common_attn_metadata,

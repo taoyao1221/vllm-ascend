@@ -34,7 +34,8 @@ from vllm.utils import direct_register_custom_op
 from vllm_ascend.ascend_config import get_ascend_config
 from vllm_ascend.utils import vllm_version_is
 
-if vllm_version_is("0.11.0"):
+# if vllm_version_is("0.11.0"):
+if True:
     from vllm.attention import Attention
     from vllm.model_executor.layers.mla import \
         MultiHeadLatentAttention as MultiHeadLatentAttentionWrapper
@@ -78,7 +79,8 @@ class AscendMultiHeadLatentAttention(MultiHeadLatentAttentionWrapper):
         self.tp_size = get_tensor_model_parallel_world_size()
         self.layers = hf_config.num_hidden_layers
 
-        if vllm_version_is("0.11.0"):
+        # if vllm_version_is("0.11.0"):
+        if True:
             self.mla_attn = Attention(
                 num_heads=num_heads,
                 head_size=self.kv_lora_rank + self.qk_rope_head_dim,
