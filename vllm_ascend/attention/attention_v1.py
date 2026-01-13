@@ -615,7 +615,8 @@ class AscendAttentionBackendImpl(AttentionImpl):
             return output
         if (attn_metadata.attn_state == AscendAttentionState.DecodeOnly
                 and self.sliding_window is not None
-                and attn_metadata.seq_lens.shape[0] == query.size(0)):
+                and attn_metadata.seq_lens.shape[0] == query.size(0)
+                and self.sinks is None):
             return self._forward_fia_slidingwindow(query, attn_metadata,
                                                    output)
         key, value, block_size, block_table, actual_seq_lengths_kv \
@@ -637,9 +638,7 @@ class AscendAttentionBackendImpl(AttentionImpl):
                 atten_mask = self.attn_mask_builder.get_swa_mask(torch.bool, self.sliding_window)
                 sparse_mode = 4
             else:
-                # atten_mask = self.attn_mask_builder.get_attn_mask(2048, torch.bool)
-                atten_mask = ~torch.tril(
-                    torch.ones((2048, 2048), device='npu', dtype=torch.bool))
+                atten_mask = self.attn_mask_builder.get_attn_mask(2048, torch.bool)
                 sparse_mode = 3
             attn_output, _ = torch_npu.npu_fused_infer_attention_score_v2(
                 query,
@@ -677,8 +676,8 @@ class AscendAttentionBackendImpl(AttentionImpl):
                 sparse_mode=3,
             )
 
-        attn_output = attn_output.view(num_tokens, self.num_heads,
-                                       self.head_size)
+            attn_output = attn_output.view(num_tokens, self.num_heads,
+                                           self.head_size)
         output[:num_tokens] = attn_output[:num_tokens]
         return output
 
