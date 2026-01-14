@@ -596,7 +596,10 @@ class AscendAttentionBackendImpl(AttentionImpl):
                                    attn_metadata: AscendMetadata,
                                    output: torch.Tensor):
 <<<<<<< HEAD
+<<<<<<< HEAD
 >>>>>>> 70b17645 (refactor(attention): Fix the condition judgment for sliding window attention calculation and add checks for sinks.)
+=======
+>>>>>>> 4fce94be (refactor(attention): Fix the condition judgment for sliding window attention calculation and add checks for sinks.)
         batch_size = attn_metadata.seq_lens.shape[0]
         block_size = 128
         query = query.view(batch_size, 1, self.num_heads * self.head_size)
@@ -606,6 +609,7 @@ class AscendAttentionBackendImpl(AttentionImpl):
             block_size = self.key_cache.shape[1]
             key = self.key_cache.flatten(2, 3).contiguous()
             value = self.value_cache.flatten(2, 3).contiguous()
+<<<<<<< HEAD
 
         output, _ = torch_npu.npu_fused_infer_attention_score(
             query,
@@ -666,22 +670,24 @@ class AscendAttentionBackendImpl(AttentionImpl):
                 key = self.key_cache.flatten(2, 3).contiguous()
                 value = self.value_cache.flatten(2, 3).contiguous()
 >>>>>>> 55463c06 (refactor(attention): Fix the condition judgment for sliding window attention calculation and add checks for sinks.)
+=======
 
-            output, _ = torch_npu.npu_fused_infer_attention_score(
-                query,
-                key,
-                value,
-                num_heads=self.num_heads,
-                num_key_value_heads=self.num_kv_heads,
-                input_layout="BSH",
-                block_size=block_size,
-                pre_tokens=self.sliding_window,
-                scale=self.scale,
-                block_table=attn_metadata.block_tables,
-                actual_seq_lengths=[1] * len(attn_metadata.seq_lens),
-                actual_seq_lengths_kv=attn_metadata.seq_lens)
+        output, _ = torch_npu.npu_fused_infer_attention_score(
+            query,
+            key,
+            value,
+            num_heads=self.num_heads,
+            num_key_value_heads=self.num_kv_heads,
+            input_layout="BSH",
+            block_size=block_size,
+            pre_tokens=self.sliding_window,
+            scale=self.scale,
+            block_table=attn_metadata.block_tables,
+            actual_seq_lengths=[1] * len(attn_metadata.seq_lens),
+            actual_seq_lengths_kv=attn_metadata.seq_lens)
+>>>>>>> 4fce94be (refactor(attention): Fix the condition judgment for sliding window attention calculation and add checks for sinks.)
 
-            output = output.view(batch_size, self.num_heads, self.head_size)
+        output = output.view(batch_size, self.num_heads, self.head_size)
         return output
 
     def forward_fused_infer_attention(
