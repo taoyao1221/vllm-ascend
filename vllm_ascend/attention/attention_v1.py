@@ -367,13 +367,6 @@ class AscendAttentionBackendImpl(AttentionImpl):
         self.sinks = sinks
         self.attn_mask_builder = AttentionMaskBuilder(device="npu")
 
-        self.pcp_size = get_prefill_context_model_parallel_world_size(
-        ) if prefill_context_parallel_enable() else 1
-        self.pcp_rank = get_prefill_context_model_parallel_rank(
-        ) if self.pcp_size > 1 else 0
-        self.pcp_group = get_pcp_group(
-        ).device_group if self.pcp_size > 1 else None
-
     def process_weights_after_loading(self, act_dtype: torch.dtype):
         super().process_weights_after_loading(act_dtype)
         if flashcomm2_oshard_manager.flashcomm2_oshard_enable():
