@@ -347,9 +347,16 @@ class AscendAttentionBackendImpl(AttentionImpl):
         kv_cache_dtype: str,
         logits_soft_cap: float | None,
         attn_type: str,
+<<<<<<< HEAD
         kv_sharing_target_layer_name: str | None,
             sinks: torch.Tensor = None,
             **kwargs,
+=======
+        kv_sharing_target_layer_name: Optional[str],
+        device: torch.device,
+        sinks: torch.Tensor = None,
+        **kwargs,
+>>>>>>> 655ad2b3 (refactor(attention): Using torch.device to retrieve device information instead of hardcoding)
     ) -> None:
         self.vllm_config = get_current_vllm_config()
         self.num_heads = num_heads
@@ -382,8 +389,9 @@ class AscendAttentionBackendImpl(AttentionImpl):
 
         # For sink attention
         self.is_kv_producer = self.vllm_config.kv_transfer_config is not None and self.vllm_config.kv_transfer_config.is_kv_producer
+        self.device = device
         self.sinks = sinks
-        self.attn_mask_builder = AttentionMaskBuilder(device="npu")
+        self.attn_mask_builder = AttentionMaskBuilder(self.device)
 
     def process_weights_after_loading(self, act_dtype: torch.dtype):
         super().process_weights_after_loading(act_dtype)
