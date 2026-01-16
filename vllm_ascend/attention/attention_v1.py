@@ -353,7 +353,6 @@ class AscendAttentionBackendImpl(AttentionImpl):
             **kwargs,
 =======
         kv_sharing_target_layer_name: Optional[str],
-        device: torch.device,
         sinks: torch.Tensor = None,
         **kwargs,
 >>>>>>> 655ad2b3 (refactor(attention): Using torch.device to retrieve device information instead of hardcoding)
@@ -389,7 +388,11 @@ class AscendAttentionBackendImpl(AttentionImpl):
 
         # For sink attention
         self.is_kv_producer = self.vllm_config.kv_transfer_config is not None and self.vllm_config.kv_transfer_config.is_kv_producer
-        self.device = device
+        self.device = None
+        if hasattr(torch, "npu") and callable(getattr(torch.npu, "is_available", None)) and torch.npu.is_available():
+            self.device = torch.device("npu")
+        else:
+            self.device = torch.device("cpu")
         self.sinks = sinks
         self.attn_mask_builder = AttentionMaskBuilder(self.device)
 
