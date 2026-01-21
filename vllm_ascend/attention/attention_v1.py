@@ -388,11 +388,7 @@ class AscendAttentionBackendImpl(AttentionImpl):
 
         # For sink attention
         self.is_kv_producer = self.vllm_config.kv_transfer_config is not None and self.vllm_config.kv_transfer_config.is_kv_producer
-        self.device = None
-        if hasattr(torch, "npu") and callable(getattr(torch.npu, "is_available", None)) and torch.npu.is_available():
-            self.device = torch.device("npu")
-        else:
-            self.device = torch.device("cpu")
+        self.device = torch.device("npu")
         self.sinks = sinks
         self.attn_mask_builder = AttentionMaskBuilder(self.device)
 
