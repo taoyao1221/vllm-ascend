@@ -371,10 +371,7 @@ class AscendAttentionBackendImpl(AttentionImpl):
         self.is_kv_producer = (
             self.vllm_config.kv_transfer_config is not None and self.vllm_config.kv_transfer_config.is_kv_producer
         )
-        # For sink attention
-        self.device = torch.device("npu")
         self.sinks = sinks
-        self.attn_mask_builder = AttentionMaskBuilder(self.device)
 
     def process_weights_after_loading(self, act_dtype: torch.dtype):
         super().process_weights_after_loading(act_dtype)
@@ -647,11 +644,12 @@ class AscendAttentionBackendImpl(AttentionImpl):
             if attn_metadata.attn_state == AscendAttentionState.DecodeOnly:
                 actual_seq_qlen = torch.tensor([1] * len(attn_metadata.seq_lens_list), dtype=torch.int32).cumsum(dim=0)
             # calculate atten_mask & sparse_mode by sliding_window
+            attn_mask_builder = AttentionMaskBuilder("npu")
             if self.sliding_window is not None:
-                atten_mask = self.attn_mask_builder.get_swa_mask(torch.bool, self.sliding_window)
+                atten_mask = attn_mask_builder.get_swa_mask(torch.bool, self.sliding_window)
                 sparse_mode = 4
             else:
-                atten_mask = self.attn_mask_builder.get_attn_mask(2048, torch.bool)
+                atten_mask = attn_mask_builder.get_attn_mask(2048, torch.bool)
                 sparse_mode = 3
             attn_output, _ = torch_npu.npu_fused_infer_attention_score_v2(
                 query,
