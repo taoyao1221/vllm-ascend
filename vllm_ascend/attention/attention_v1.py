@@ -347,15 +347,9 @@ class AscendAttentionBackendImpl(AttentionImpl):
         kv_cache_dtype: str,
         logits_soft_cap: float | None,
         attn_type: str,
-<<<<<<< HEAD
         kv_sharing_target_layer_name: str | None,
-            sinks: torch.Tensor = None,
-            **kwargs,
-=======
-        kv_sharing_target_layer_name: Optional[str],
         sinks: torch.Tensor = None,
         **kwargs,
->>>>>>> 655ad2b3 (refactor(attention): Using torch.device to retrieve device information instead of hardcoding)
     ) -> None:
         self.vllm_config = get_current_vllm_config()
         self.num_heads = num_heads
@@ -377,17 +371,7 @@ class AscendAttentionBackendImpl(AttentionImpl):
         self.is_kv_producer = (
             self.vllm_config.kv_transfer_config is not None and self.vllm_config.kv_transfer_config.is_kv_producer
         )
-        if self.sliding_window is not None:
-            mask = torch.ones(2048, 2048, dtype=torch.bool)
-            triu_mask = torch.triu(mask, diagonal=1).to("npu")
-            tril_mask = torch.tril(mask, -self.sliding_window).to("npu")
-            self.share_mask_tril_spase = triu_mask + tril_mask
-        else:
-            self.share_mask_tril_spase = ~torch.tril(
-                torch.ones((2048, 2048), device='npu', dtype=torch.bool))
-
         # For sink attention
-        self.is_kv_producer = self.vllm_config.kv_transfer_config is not None and self.vllm_config.kv_transfer_config.is_kv_producer
         self.device = torch.device("npu")
         self.sinks = sinks
         self.attn_mask_builder = AttentionMaskBuilder(self.device)
@@ -596,17 +580,7 @@ class AscendAttentionBackendImpl(AttentionImpl):
             actual_seq_lengths_kv = attn_metadata.seq_lens_list
         return key, value, block_size, block_table, actual_seq_lengths_kv
 
-<<<<<<< HEAD
     def _forward_fia_slidingwindow(self, query: torch.Tensor, attn_metadata: AscendMetadata, output: torch.Tensor):
-=======
-    def _forward_fia_slidingwindow(self, query: torch.Tensor,
-                                   attn_metadata: AscendMetadata,
-                                   output: torch.Tensor):
-<<<<<<< HEAD
-<<<<<<< HEAD
->>>>>>> 70b17645 (refactor(attention): Fix the condition judgment for sliding window attention calculation and add checks for sinks.)
-=======
->>>>>>> 4fce94be (refactor(attention): Fix the condition judgment for sliding window attention calculation and add checks for sinks.)
         batch_size = attn_metadata.seq_lens.shape[0]
         block_size = 128
         query = query.view(batch_size, 1, self.num_heads * self.head_size)
@@ -616,7 +590,6 @@ class AscendAttentionBackendImpl(AttentionImpl):
             block_size = self.key_cache.shape[1]
             key = self.key_cache.flatten(2, 3).contiguous()
             value = self.value_cache.flatten(2, 3).contiguous()
-<<<<<<< HEAD
 
         output, _ = torch_npu.npu_fused_infer_attention_score(
             query,
@@ -630,69 +603,8 @@ class AscendAttentionBackendImpl(AttentionImpl):
             scale=self.scale,
             block_table=attn_metadata.block_tables,
             actual_seq_lengths=[1] * len(attn_metadata.seq_lens),
-<<<<<<< HEAD
             actual_seq_lengths_kv=attn_metadata.seq_lens,
         )
-=======
-            actual_seq_lengths_kv=attn_metadata.seq_lens)
->>>>>>> 70b17645 (refactor(attention): Fix the condition judgment for sliding window attention calculation and add checks for sinks.)
-=======
-        if self.sinks is not None:
-            num_block, block_size, _, _ = self.key_cache.shape
-            actual_seq_qlen = torch.tensor([1] *
-                                           len(attn_metadata.seq_lens_list),
-                                           dtype=torch.int32).cumsum(dim=0)
-            key = self.key_cache.view(  # type: ignore
-                num_block, block_size, -1)
-            value = self.value_cache.view(  # type: ignore
-                num_block, block_size, -1)
-            atten_mask = self.attn_mask_builder.get_swa_mask(torch.bool, self.sliding_window)
-
-            output, _ = torch_npu.npu_fused_infer_attention_score_v2(
-                query,
-                key,
-                value,
-                num_query_heads=self.num_heads,
-                num_key_value_heads=self.num_kv_heads,
-                input_layout="TND",
-                pre_tokens=self.sliding_window,
-                next_tokens=0,
-                atten_mask=atten_mask,
-                sparse_mode=4,
-                softmax_scale=self.scale,
-                block_table=attn_metadata.block_tables,
-                block_size=block_size,
-                actual_seq_qlen=actual_seq_qlen,
-                actual_seq_kvlen=attn_metadata.seq_lens_list,
-                learnable_sink=self.sinks
-            )
-        else:
-            batch_size = attn_metadata.seq_lens.shape[0]
-            block_size = 128
-            query = query.view(batch_size, 1, self.num_heads * self.head_size)
-            key = self.key_cache
-            value = self.value_cache
-            if self.key_cache is not None and self.value_cache is not None:
-                block_size = self.key_cache.shape[1]
-                key = self.key_cache.flatten(2, 3).contiguous()
-                value = self.value_cache.flatten(2, 3).contiguous()
->>>>>>> 55463c06 (refactor(attention): Fix the condition judgment for sliding window attention calculation and add checks for sinks.)
-=======
-
-        output, _ = torch_npu.npu_fused_infer_attention_score(
-            query,
-            key,
-            value,
-            num_heads=self.num_heads,
-            num_key_value_heads=self.num_kv_heads,
-            input_layout="BSH",
-            block_size=block_size,
-            pre_tokens=self.sliding_window,
-            scale=self.scale,
-            block_table=attn_metadata.block_tables,
-            actual_seq_lengths=[1] * len(attn_metadata.seq_lens),
-            actual_seq_lengths_kv=attn_metadata.seq_lens)
->>>>>>> 4fce94be (refactor(attention): Fix the condition judgment for sliding window attention calculation and add checks for sinks.)
 
         output = output.view(batch_size, self.num_heads, self.head_size)
         return output
