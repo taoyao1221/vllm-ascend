@@ -43,6 +43,8 @@ from transformers import (AutoConfig, AutoModelForCausalLM, AutoTokenizer,
                           BatchEncoding, BatchFeature)
 from transformers.models.auto.auto_factory import _BaseAutoModelClass
 from vllm import LLM, SamplingParams
+from vllm.config import VllmConfig, set_current_vllm_config
+from unittest.mock import MagicMock, patch
 from vllm.config.model import (ConvertOption, RunnerOption,
                                _get_and_verify_dtype)
 from vllm.inputs import TextPrompt
@@ -875,3 +877,14 @@ PROMPT_CONFIGS = {
 @pytest.fixture(params=PROMPT_CONFIGS.keys())
 def vl_config(request):
     return PROMPT_CONFIGS[request.param]
+
+
+@pytest.fixture
+def default_vllm_config():
+    mock_config = MagicMock()
+
+    mock_config.compilation_config.dispatch_forward_backend = "eager"
+    mock_config.compilation_config.custom_ops = ["all"]
+
+    with set_current_vllm_config(mock_config):
+        yield mock_config

@@ -287,7 +287,7 @@ def test_qwen3_w4a4_distributed_tp2(model):
 
 
 @pytest.mark.parametrize("model", GPT_OSS_MODELS)
-def test_gpt_oss_distributed_tp2(model):
+def test_gpt_oss_distributed_tp2(model, default_vllm_config):
     example_prompts = [
         "Hello, my name is",
     ]
