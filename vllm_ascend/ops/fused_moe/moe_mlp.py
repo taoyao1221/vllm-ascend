@@ -22,7 +22,7 @@ from torch.nn.functional import pad
 from vllm.forward_context import get_forward_context
 from vllm.triton_utils import HAS_TRITON
 
-from vllm.model_executor.layers.activation import SwigluOAIAndMul
+from vllm_ascend.ops.activation import AscendSwigluOAIAndMul
 from vllm_ascend.ascend_forward_context import MoECommType
 from vllm_ascend.utils import (AscendDeviceType, dispose_tensor,
                                enable_custom_op, get_ascend_device_type,
@@ -302,8 +302,7 @@ def unquant_apply_mlp(hidden_states: torch.Tensor,
             torch.float16)
     elif activation == "swigluoai":
         num_experts, _, hidden_size = w1.shape
-        layer = SwigluOAIAndMul()
-        gate_up_out = layer.forward_native(gate_up_out.view(-1, hidden_size))
+        gate_up_out = AscendSwigluOAIAndMul.swiglu_oai_forward(gate_up_out.view(-1, hidden_size))
     else:
         gate_up_out = torch_npu.npu_swiglu(gate_up_out)
 
