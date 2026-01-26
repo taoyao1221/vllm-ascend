@@ -197,8 +197,8 @@ class ProxyState:
         # Initialize priority queues for efficient server selection
         # Each entry is (priority_score, server_index, server_reference)
         # Lower priority score = higher priority (less loaded)
-        self.prefiller_heap = [(0, i, server) for i, server in enumerate(self.prefillers)]
-        self.decoder_heap = [(0, i, server) for i, server in enumerate(self.decoders)]
+        self.prefiller_heap = [(0.0, i, server) for i, server in enumerate(self.prefillers)]
+        self.decoder_heap = [(0.0, i, server) for i, server in enumerate(self.decoders)]
         heapq.heapify(self.prefiller_heap)
         heapq.heapify(self.decoder_heap)
 
